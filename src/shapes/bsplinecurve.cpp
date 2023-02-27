@@ -32,6 +32,16 @@ NAMESPACE_BEGIN(mitsuba)
  * - Internally, we should only make use of `m_vertex` and `m_radius` for
  *   gradient tracking, otherwise the mi.render() function will behave
  *   "un-expectedly".
+ *
+ * - Documentation:
+ *      - Scalar modes not supported
+ *      - Orthographic broken in CUDA
+ *      - Endcaps
+ *      - Backface culling  CUDA
+ *      - File format description
+ *
+ * TODO:
+ * - Check that instancing works
  */
 
 template <typename Float, typename Spectrum>
