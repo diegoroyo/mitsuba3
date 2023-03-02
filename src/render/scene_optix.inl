@@ -198,7 +198,9 @@ size_t init_optix_config(bool has_meshes, bool has_others, bool has_instances,
             options.builtinISModuleType   = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
             options.usesMotionBlur        = false;
             options.curveEndcapFlags      = 0;
-            options.buildFlags            = 0;
+            // buildFlags must match the flags used in OptixAccelBuildOptions (shapes.h)
+            options.buildFlags            = OPTIX_BUILD_FLAG_ALLOW_COMPACTION |
+                                            OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
             jit_optix_check(
                 optixBuiltinISModuleGet(config.context, &module_compile_options,
                                         &config.pipeline_compile_options,
@@ -209,7 +211,9 @@ size_t init_optix_config(bool has_meshes, bool has_others, bool has_instances,
             options.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_LINEAR;
             options.usesMotionBlur      = false;
             options.curveEndcapFlags    = 0;
-            options.buildFlags          = 0;
+            // buildFlags must match the flags used in OptixAccelBuildOptions (shapes.h)
+            options.buildFlags          = OPTIX_BUILD_FLAG_ALLOW_COMPACTION |
+                                          OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
             jit_optix_check(
                 optixBuiltinISModuleGet(config.context, &module_compile_options,
                                         &config.pipeline_compile_options,
