@@ -98,15 +98,24 @@ size_t init_optix_config(bool has_meshes, bool has_others, bool has_instances,
         config.pipeline_compile_options.numAttributeValues = 2; // the minimum legal value
         config.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
+        bool at_least_two_gas = [&]() {
+            uint32_t counter = 0;
+            for (bool has_gas : { has_meshes, has_bspline_curves,
+                                  has_linear_curves, has_others })
+                if (has_gas)
+                    if (++counter >= 2)
+                        return true;
+            return false;
+        }();
+
+        uint32_t traversable_flag = 0;
         if (has_instances)
-            config.pipeline_compile_options.traversableGraphFlags =
-                OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
-        else if (has_others && has_meshes)
-            config.pipeline_compile_options.traversableGraphFlags =
-                OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
+            traversable_flag = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
+        else if (at_least_two_gas)
+            traversable_flag = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
         else
-            config.pipeline_compile_options.traversableGraphFlags =
-                OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
+            traversable_flag = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
+        config.pipeline_compile_options.traversableGraphFlags = traversable_flag;
 
     #if !defined(MI_OPTIX_DEBUG)
         config.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
