@@ -47,7 +47,7 @@ NAMESPACE_BEGIN(mitsuba)
 template <typename Float, typename Spectrum>
 class BSplineCurve final : public Shape<Float, Spectrum> {
 public:
-    MI_IMPORT_BASE(Shape, m_to_world, m_to_object, m_is_instance, initialize,
+    MI_IMPORT_BASE(Shape, m_to_world, m_is_instance, initialize,
                    mark_dirty, get_children_string, parameters_grad_enabled)
     MI_IMPORT_TYPES()
 
@@ -294,14 +294,10 @@ public:
         bool detach_shape = has_flag(ray_flags, RayFlags::DetachShape);
         bool follow_shape = has_flag(ray_flags, RayFlags::FollowShape);
 
-        const Transform4f& to_world = m_to_world.value();
-        const Transform4f& to_object = m_to_object.value();
-
         /* If necessary, temporally suspend gradient tracking for all shape
            parameters to construct a surface interaction completely detach from
            the shape. */
-        dr::suspend_grad<Float> scope(detach_shape, to_world, to_object,
-                                      m_vertex, m_radius);
+        dr::suspend_grad<Float> scope(detach_shape, m_vertex, m_radius);
 
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
 
@@ -446,7 +442,6 @@ public:
     RTCGeometry embree_geometry(RTCDevice device) override {
         RTCGeometry geom = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_ROUND_BSPLINE_CURVE);
 
-        dr::eval(m_vertex_with_radius); // Make sure m_vertex_with_radius is up to date
         rtcSetSharedGeometryBuffer(geom, RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT4,
                                    m_vertex_with_radius.data(), 0, 4 * sizeof(InputFloat),
                                    m_control_point_count);
@@ -495,9 +490,6 @@ public:
         dr::scatter(m_vertex_with_radius, dr::gather<Float>(m_vertex, idx * 3u + 1u), idx * 4u + 1u);
         dr::scatter(m_vertex_with_radius, dr::gather<Float>(m_vertex, idx * 3u + 2u), idx * 4u + 2u);
         dr::scatter(m_vertex_with_radius, dr::gather<Float>(m_radius, idx * 1u + 0u), idx * 4u + 3u);
-        dr::eval(m_vertex_with_radius);
-
-        m_to_object = m_to_world.value().inverse();
     }
 
     bool is_curve() const override {
