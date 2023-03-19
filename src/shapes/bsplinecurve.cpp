@@ -460,7 +460,7 @@ public:
     void optix_build_input(OptixBuildInput &build_input) const override {
         m_vertex_buffer_ptr = (void*) m_vertex.data(); // triggers dr::eval()
         m_radius_buffer_ptr = (void*) m_radius.data(); // triggers dr::eval()
-        m_index_buffer_ptr = (void*) m_indices.data(); // triggers dr::eval()
+        m_index_buffer_ptr  = (void*) m_indices.data(); // triggers dr::eval()
 
         build_input.type = OPTIX_BUILD_INPUT_TYPE_CURVES;
         build_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
@@ -490,10 +490,6 @@ public:
         dr::scatter(m_vertex_with_radius, dr::gather<Float>(m_vertex, idx * 3u + 1u), idx * 4u + 1u);
         dr::scatter(m_vertex_with_radius, dr::gather<Float>(m_vertex, idx * 3u + 2u), idx * 4u + 2u);
         dr::scatter(m_vertex_with_radius, dr::gather<Float>(m_radius, idx * 1u + 0u), idx * 4u + 3u);
-    }
-
-    bool is_curve() const override {
-        return true;
     }
 
     bool is_bspline_curve() const override {
