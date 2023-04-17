@@ -883,6 +883,42 @@ class RBIntegrator(ADIntegrator):
             # derivatives wrt. sample positions ('pos') if there are any
             ray, weight, pos, det = self.sample_rays(scene, sensor,
                                                      sampler, reparam)
+            
+            # Prepare an ImageBlock as specified by the film
+            block = film.create_block()
+
+            # Only use the coalescing feature when rendering enough samples
+            block.set_coalesce(block.coalesce() and spp >= 4)
+
+            # Differentiate sample splatting and weight division steps to
+            # retrieve the adjoint radiance (e.g. 'δL')
+            with dr.resume_grad():
+                with dr.suspend_grad(pos, det, ray, weight):
+                    L = dr.full(mi.Spectrum, 1.0, dr.width(ray))
+                    dr.enable_grad(L)
+
+                    if (dr.all(mi.has_flag(film.flags(), mi.FilmFlags.Special))):
+                        aovs = film.prepare_sample(L * weight, ray.wavelengths,
+                                                   block.channel_count())
+                        block.put(pos, aovs)
+                        del aovs
+                    else:
+                        block.put(
+                            pos=pos,
+                            wavelengths=ray.wavelengths,
+                            value=L * weight
+                        )
+
+                    film.put_block(block)
+                    image = film.develop()
+
+                    dr.set_grad(image, grad_in)
+                    dr.enqueue(dr.ADMode.Backward, image)
+                    dr.traverse(mi.Float, dr.ADMode.Backward)
+                    δL = dr.grad(L)
+
+                    # Clear the dummy data splatted on the film above
+                    film.clear()
 
             # Launch the Monte Carlo sampling process in primal mode (1)
             L, valid, state_out = self.sample(
@@ -897,55 +933,6 @@ class RBIntegrator(ADIntegrator):
                 active=mi.Bool(True)
             )
 
-            # Prepare an ImageBlock as specified by the film
-            block = film.create_block()
-
-            # Only use the coalescing feature when rendering enough samples
-            block.set_coalesce(block.coalesce() and spp >= 4)
-
-            with dr.resume_grad():
-                dr.enable_grad(L)
-
-                # Accumulate into the image block.
-                # After reparameterizing the camera ray, we need to evaluate
-                #   Σ (fi Li det)
-                #  ---------------
-                #   Σ (fi det)
-                if (dr.all(mi.has_flag(sensor.film().flags(), mi.FilmFlags.Special))):
-                    aovs = sensor.film().prepare_sample(L * weight * det, ray.wavelengths,
-                                                        block.channel_count(),
-                                                        weight=det,
-                                                        alpha=dr.select(valid, mi.Float(1), mi.Float(0)))
-                    block.put(pos, aovs)
-                    del aovs
-                else:
-                    block.put(
-                        pos=pos,
-                        wavelengths=ray.wavelengths,
-                        value=L * weight * det,
-                        weight=det,
-                        alpha=dr.select(valid, mi.Float(1), mi.Float(0))
-                    )
-
-                sensor.film().put_block(block)
-
-                # Probably a little overkill, but why not.. If there are any
-                # DrJit arrays to be collected by Python's cyclic GC, then
-                # freeing them may enable loop simplifications in dr.eval().
-                del valid
-                gc.collect()
-
-                # This step launches a kernel
-                dr.schedule(state_out, block.tensor())
-                image = sensor.film().develop()
-
-                # Differentiate sample splatting and weight division steps to
-                # retrieve the adjoint radiance
-                dr.set_grad(image, grad_in)
-                dr.enqueue(dr.ADMode.Backward, image)
-                dr.traverse(mi.Float, dr.ADMode.Backward)
-                δL = dr.grad(L)
-
             # Launch Monte Carlo sampling in backward AD mode (2)
             L_2, valid_2, state_out_2 = self.sample(
                 mode=dr.ADMode.Backward,
@@ -958,6 +945,53 @@ class RBIntegrator(ADIntegrator):
                 reparam=reparam,
                 active=mi.Bool(True)
             )
+
+            # Propagate gradient image to sample positions if necessary
+            if reparam is not None:
+                # Prepare an ImageBlock as specified by the film
+                block = film.create_block()
+
+                # Only use the coalescing feature when rendering enough samples
+                block.set_coalesce(block.coalesce() and spp >= 4)
+
+                with dr.resume_grad():
+                    # Accumulate into the image block.
+                    # After reparameterizing the camera ray, we need to evaluate
+                    #   Σ (fi Li det)
+                    #  ---------------
+                    #   Σ (fi det)
+                    if (dr.all(mi.has_flag(film.flags(), mi.FilmFlags.Special))):
+                        aovs = film.prepare_sample(L * weight * det, ray.wavelengths,
+                                                   block.channel_count(),
+                                                   weight=det,
+                                                   alpha=dr.select(valid, mi.Float(1), mi.Float(0)))
+                        block.put(pos, aovs)
+                        del aovs
+                    else:
+                        block.put(
+                            pos=pos,
+                            wavelengths=ray.wavelengths,
+                            value=L * weight * det,
+                            weight=det,
+                            alpha=dr.select(valid, mi.Float(1), mi.Float(0))
+                        )
+
+                    film.put_block(block)
+
+                    # Probably a little overkill, but why not.. If there are any
+                    # DrJit arrays to be collected by Python's cyclic GC, then
+                    # freeing them may enable loop simplifications in dr.eval().
+                    del valid
+                    gc.collect()
+
+                    # This step launches a kernel
+                    dr.schedule(block.tensor())
+                    image = film.develop()
+
+                    # Propagate gradient image to sample positions ('pos')
+                    dr.set_grad(image, grad_in)
+                    dr.enqueue(dr.ADMode.Backward, image)
+                    dr.traverse(mi.Float, dr.ADMode.Backward)
 
             # We don't need any of the outputs here
             del L_2, valid_2, state_out, state_out_2, δL, \
