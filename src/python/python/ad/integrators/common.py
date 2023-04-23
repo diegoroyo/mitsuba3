@@ -669,19 +669,6 @@ class RBIntegrator(ADIntegrator):
             ray, weight, pos, det = self.sample_rays(scene, sensor,
                                                      sampler, reparam)
 
-            # Launch the Monte Carlo sampling process in primal mode (1)
-            L, valid, state_out = self.sample(
-                mode=dr.ADMode.Primal,
-                scene=scene,
-                sampler=sampler.clone(),
-                ray=ray,
-                depth=mi.UInt32(0),
-                δL=None,
-                state_in=None,
-                reparam=None,
-                active=mi.Bool(True)
-            )
-
             # Differentiable camera pose parameters or a reparameterization
             # have an effect on the measurement integral performed at the
             # sensor. We account for this here by differentiating the
@@ -697,6 +684,9 @@ class RBIntegrator(ADIntegrator):
 
             with dr.resume_grad():
                 if dr.grad_enabled(pos):
+                    L = dr.full(mi.Spectrum, 1.0, dr.width(ray))
+                    dr.enable_grad(L)
+
                     sample_pos_deriv = film.create_block()
 
                     # Only use the coalescing feature when rendering enough samples
@@ -704,19 +694,16 @@ class RBIntegrator(ADIntegrator):
 
                     # Deposit samples with gradient tracking for 'pos'.
                     if (dr.all(mi.has_flag(film.flags(), mi.FilmFlags.Special))):
-                        aovs = film.prepare_sample(L * weight * det, ray.wavelengths,
-                                                            sample_pos_deriv.channel_count(),
-                                                            weight=det,
-                                                            alpha=dr.select(valid, mi.Float(1), mi.Float(0)))
+                        aovs = film.prepare_sample(L * weight, ray.wavelengths,
+                                                   sample_pos_deriv.channel_count())
+                                                            
                         sample_pos_deriv.put(pos, aovs)
                         del aovs
                     else:
                         sample_pos_deriv.put(
                             pos=pos,
                             wavelengths=ray.wavelengths,
-                            value=L * weight * det,
-                            weight=det,
-                            alpha=dr.select(valid, mi.Float(1), mi.Float(0))
+                            value=L * weight,
                         )
 
                     # Compute the derivative of the reparameterized image ..
@@ -735,8 +722,18 @@ class RBIntegrator(ADIntegrator):
             # freeing them may enable loop simplifications in dr.eval().
             gc.collect()
 
-            # Launch a kernel with everything so far
-            dr.eval(state_out)
+            # Launch the Monte Carlo sampling process in primal mode (1)
+            L, valid, state_out = self.sample(
+                mode=dr.ADMode.Primal,
+                scene=scene,
+                sampler=sampler.clone(),
+                ray=ray,
+                depth=mi.UInt32(0),
+                δL=None,
+                state_in=None,
+                reparam=None,
+                active=mi.Bool(True)
+            )
 
             # Garbage collect unused values to simplify kernel about to be run
             del L, valid, params
