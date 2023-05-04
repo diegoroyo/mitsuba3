@@ -65,6 +65,22 @@ public:
         PYBIND11_OVERRIDE_PURE(Spectrum, BSDF, eval_diffuse_reflectance, si, active);
     }
 
+    Mask has_attribute(const std::string &name, Mask active) const override {
+        PYBIND11_OVERRIDE_PURE(Mask, BSDF, has_attribute, name, active);
+    }
+
+    UnpolarizedSpectrum eval_attribute(const std::string &name, const SurfaceInteraction3f &si, Mask active) const override {
+        PYBIND11_OVERRIDE_PURE(UnpolarizedSpectrum, BSDF, eval_attribute, name, si, active);
+    }
+
+    Float eval_attribute_1(const std::string &name, const SurfaceInteraction3f &si, Mask active) const override {
+        PYBIND11_OVERRIDE_PURE(Float, BSDF, eval_attribute_1, name, si, active);
+    }
+
+    Color3f eval_attribute_3(const std::string &name, const SurfaceInteraction3f &si, Mask active) const override {
+        PYBIND11_OVERRIDE_PURE(Color3f, BSDF, eval_attribute_3, name, si, active);
+    }
+
     std::string to_string() const override {
         PYBIND11_OVERRIDE_PURE(std::string, BSDF, to_string,);
     }
@@ -112,6 +128,29 @@ template <typename Ptr, typename Cls> void bind_bsdf_generic(Cls &cls) {
              [](Ptr bsdf, const SurfaceInteraction3f &si, Mask active) {
                  return bsdf->eval_diffuse_reflectance(si, active);
              }, "si"_a, "active"_a = true, D(BSDF, eval_diffuse_reflectance))
+             .def("has_attribute",
+            [](Ptr bsdf, const std::string &name, const Mask &active) {
+                return bsdf->has_attribute(name, active);
+            },
+            "name"_a, "active"_a = true, D(BSDF, has_attribute))
+       .def("eval_attribute",
+            [](Ptr bsdf, const std::string &name,
+               const SurfaceInteraction3f &si, const Mask &active) {
+                return bsdf->eval_attribute(name, si, active);
+            },
+            "name"_a, "si"_a, "active"_a = true, D(BSDF, eval_attribute))
+       .def("eval_attribute_1",
+            [](Ptr bsdf, const std::string &name,
+               const SurfaceInteraction3f &si, const Mask &active) {
+                return bsdf->eval_attribute_1(name, si, active);
+            },
+            "name"_a, "si"_a, "active"_a = true, D(BSDF, eval_attribute_1))
+       .def("eval_attribute_3",
+            [](Ptr bsdf, const std::string &name,
+               const SurfaceInteraction3f &si, const Mask &active) {
+                return bsdf->eval_attribute_3(name, si, active);
+            },
+            "name"_a, "si"_a, "active"_a = true, D(BSDF, eval_attribute_3))
         .def("flags", [](Ptr bsdf) { return bsdf->flags(); }, D(BSDF, flags))
         .def("needs_differentials",
              [](Ptr bsdf) { return bsdf->needs_differentials(); },
