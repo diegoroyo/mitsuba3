@@ -11,8 +11,6 @@ def test01_create():
     assert b.component_count() == 1
     assert b.flags(0) == (mi.BSDFFlags.Glossy | mi.BSDFFlags.FrontSide | mi.BSDFFlags.BackSide | mi.BSDFFlags.NonSymmetric)
     assert b.flags() == b.flags(0)
-    params = traverse(b)
-    print (params)
 
 
 def test02_white_furnace(variants_vec_backends_once_rgb):
@@ -133,12 +131,11 @@ def test04_sample_numeric(variants_vec_backends_once_rgb):
             # Sometimes when pdf is zero spec will return 0
             spec = dr.select(abs(spec.y) < 1e-6, 1, spec)
 
-            flag = dr.allclose(spec.y, 1, atol = 0.001)
+            flag = dr.allclose(spec.y, 1, atol = 1e-3)
             assert (dr.all(flag))
 
             beta_n += 0.2
         beta_m += 0.2
-    
 
 
 def test04_sample_pdf(variants_vec_backends_once_rgb):

@@ -1,10 +1,10 @@
-#include <fstream>
 #include <mitsuba/core/properties.h>
 #include <mitsuba/core/spectrum.h>
 #include <mitsuba/core/warp.h>
 #include <mitsuba/render/bsdf.h>
 #include <mitsuba/render/fresnel.h>
 #include <mitsuba/render/texture.h>
+#include <mitsuba/render/ior.h>
 
 NAMESPACE_BEGIN(mitsuba)
 
@@ -14,79 +14,71 @@ public:
     MI_IMPORT_BASE(BSDF, m_flags, m_components)
     MI_IMPORT_TYPES(Texture)
 
-    Hair(const Properties &props) : Base(props) {        
-        // Longitudinal roughness
+    Hair(const Properties &props) : Base(props) {
+        // Roughness (longitudinal & azimuthal) and scale tilt
         m_beta_m  = props.get<ScalarFloat>("beta_m", 0.3f);
-
-        // Azimuthal roughness
         m_beta_n  = props.get<ScalarFloat>("beta_n", 0.3f);
-
-        // Shape tilt
         m_alpha   = props.get<ScalarFloat>("alpha", 2.f);
 
-        // Index of refraction at the interface
-        ScalarFloat ext_ior = props.get<ScalarFloat>("ext_ior", 1.000277f);
-        ScalarFloat int_ior = props.get<ScalarFloat>("int_ior", 1.55f);
-        m_eta     = int_ior / ext_ior;
+        // Indices of refraction at the interface
+        ScalarFloat ext_ior = lookup_ior(props, "ext_ior", "air");
+        ScalarFloat int_ior = lookup_ior(props, "int_ior", "amber");
+        m_eta = int_ior / ext_ior;
 
-        // Absroption and color
         m_eumelanin = props.get<ScalarFloat>("eumelanin", 0.f);
         m_pheomelanin = props.get<ScalarFloat>("pheomelanin", 0.f);
 
-        // Test arbitrary sigma_a
         if (props.has_property("sigma_a")){
             m_sigma_a = props.get<ScalarVector3f>("sigma_a");
             isColor = true;
         }
-        
+
         if (int_ior < 0.f || ext_ior < 0.f || int_ior == ext_ior)
-            Throw("The interior and exterior indices of "
-                  "refraction must be positive and differ!");
+            Throw("The interior and exterior indices of refraction must be "
+                  "positive and differ!");
         if (m_beta_m < 0 || m_beta_m > 1){
-            Throw("beta_m should be in [0, 1]");
+            Throw("The longitudinal roughness \"beta_m\" should be in the "
+                  "range [0, 1]!");
         }
         if (m_beta_n < 0 || m_beta_n > 1){
-            Throw("beta_n should be in [0, 1]");
-        }
-        if (pMax < 3){
-            Throw("pMax should be >= 3");
+            Throw("The azimuthal roughness \"beta_n\" should be in the "
+                  "range [0, 1]!");
         }
 
-        m_components.push_back(BSDFFlags::Glossy | BSDFFlags::FrontSide | BSDFFlags::BackSide | BSDFFlags::NonSymmetric);
-
+        // TODO: verify this
+        m_components.push_back(BSDFFlags::Glossy | BSDFFlags::FrontSide |
+                               BSDFFlags::BackSide | BSDFFlags::NonSymmetric);
         m_flags = m_components[0];
         dr::set_attr(this, "flags", m_flags);
 
-        // Preprocessing
-        // TODO: pow can be optimized here
-        v[0] = dr::sqr(0.726f * m_beta_m + 0.812f * dr::sqr(m_beta_m) +
-                       3.7f * dr::pow(m_beta_m, 20));
-        v[1] = .25f * v[0];
-        v[2] = 4 * v[0];
+        m_v[0] = dr::sqr(0.726f * m_beta_m + 0.812f * dr::sqr(m_beta_m) +
+                         3.7f * dr::pow(m_beta_m, 20));
+        m_v[1] = .25f * m_v[0];
+        m_v[2] = 4 * m_v[0];
         for (int p = 3; p <= pMax; ++p)
-            v[p] = v[2];
+            m_v[p] = m_v[2];
 
         // Compute azimuthal logistic scale factor from $\m_beta_n$
-        s = SqrtPiOver8 * (0.265f * m_beta_n + 1.194f * dr::sqr(m_beta_n) +
-                           5.372f * dr::pow(m_beta_n, 22));
+        ScalarFloat sqrt_pi_over_8 = dr::sqrt(dr::Pi<ScalarFloat> / 8.f);
+        m_s = sqrt_pi_over_8 * (0.265f * m_beta_n + 1.194f * dr::sqr(m_beta_n) +
+                                5.372f * dr::pow(m_beta_n, 22));
 
         // Compute $\m_alpha$ terms for hair scales
-        sin2kAlpha[0] = dr::sin(dr::deg_to_rad(m_alpha));
-        cos2kAlpha[0] = dr::safe_sqrt(1 - dr::sqr(sin2kAlpha[0]));
+        m_sin_2k_alpha[0] = dr::sin(dr::deg_to_rad(m_alpha));
+        m_cos_2k_alpha[0] = dr::safe_sqrt(1 - dr::sqr(m_sin_2k_alpha[0]));
         for (int i = 1; i < 3; ++i) {
-            sin2kAlpha[i] = 2 * cos2kAlpha[i - 1] * sin2kAlpha[i - 1];
-            cos2kAlpha[i] = dr::sqr(cos2kAlpha[i - 1]) - dr::sqr(sin2kAlpha[i - 1]);
+            m_sin_2k_alpha[i] = 2 * m_cos_2k_alpha[i - 1] * m_sin_2k_alpha[i - 1];
+            m_cos_2k_alpha[i] = dr::sqr(m_cos_2k_alpha[i - 1]) - dr::sqr(m_sin_2k_alpha[i - 1]);
         }
     }
 
-    void traverse(TraversalCallback *callback) override {                  
+    void traverse(TraversalCallback *callback) override {
         callback->put_parameter("m_beta_m", m_beta_m, +ParamFlags::NonDifferentiable);
         callback->put_parameter("m_beta_n", m_beta_n, +ParamFlags::NonDifferentiable);
         callback->put_parameter("m_alpha", m_alpha, +ParamFlags::NonDifferentiable);
         callback->put_parameter("m_eta", m_eta, +ParamFlags::NonDifferentiable);
-
         callback->put_parameter("m_eumelanin", m_eumelanin, +ParamFlags::NonDifferentiable);
-        callback->put_parameter("m_pheomelanin", m_pheomelanin, +ParamFlags::NonDifferentiable);  
+        callback->put_parameter("m_pheomelanin", m_pheomelanin, +ParamFlags::NonDifferentiable);
     }
 
     std::pair<BSDFSample3f, Spectrum>
@@ -95,7 +87,6 @@ public:
 
         MI_MASKED_FUNCTION(ProfilerPhase::BSDFSample, active);
 
-        Float _pdf  = Float(0);
         Vector3f wi = dr::normalize(si.wi);
         Vector3f wo;
         Float gammaI    = dr::safe_acos(wi.z() / dr::safe_sqrt(dr::sqr(wi.y()) + dr::sqr(wi.z())));
@@ -106,15 +97,13 @@ public:
         Float sinThetaI = wi.x();
         Float cosThetaI = dr::safe_sqrt(1 - dr::sqr(sinThetaI));
         Float phiI      = dr::atan2(wi.z(), wi.y());
-        
+
         BSDFSample3f bs = dr::zeros<BSDFSample3f>();
 
         Point2f u[2] = { {sample1, 0}, sample2 };
 
         // Determine which term $p$ to sample for hair scattering
         dr::Array<Float, pMax + 1> apPdf = ComputeApPdf(cosThetaI, si);
-
-        // std::cout<<apPdf[0]<<" "<<apPdf[1]<<" "<<apPdf[2]<<" "<<apPdf[3]<<std::endl;
 
         Int32 p       = Int32(-1);
         // u[0][1] is the rescaled random number after using u[0][0]
@@ -137,13 +126,6 @@ public:
         // apPdf[3] = 0;
         /******* for different lobe  ********/
 
-        // std::cout<<sample1<<std::endl;
-        // std::cout<<u[0][1]<<std::endl;
-
-        // std::cout<<dr::count(dr::eq(p, 0))<<std::endl;
-        // std::cout<<dr::count(dr::eq(p, 1))<<std::endl;
-        // std::cout<<dr::count(dr::eq(p, 2))<<std::endl;
-        // std::cout<<dr::count(dr::eq(p, 3))<<std::endl;
 
         // Rotate $\sin \thetao$ and $\cos \thetao$ to account for hair scale
         // tilt
@@ -151,24 +133,24 @@ public:
         Float cosThetaIp = cosThetaI;
 
         // if (p == 0) {
-        dr::masked(sinThetaIp, dr::eq(p, 0)) = sinThetaI * cos2kAlpha[1] - cosThetaI * sin2kAlpha[1];
-        dr::masked(cosThetaIp, dr::eq(p, 0)) = cosThetaI * cos2kAlpha[1] + sinThetaI * sin2kAlpha[1];
+        dr::masked(sinThetaIp, dr::eq(p, 0)) = sinThetaI * m_cos_2k_alpha[1] - cosThetaI * m_sin_2k_alpha[1];
+        dr::masked(cosThetaIp, dr::eq(p, 0)) = cosThetaI * m_cos_2k_alpha[1] + sinThetaI * m_sin_2k_alpha[1];
         // }
         // else if (p == 1) {
-        dr::masked(sinThetaIp, dr::eq(p, 1)) = sinThetaI * cos2kAlpha[0] + cosThetaI * sin2kAlpha[0];
-        dr::masked(cosThetaIp, dr::eq(p, 1)) = cosThetaI * cos2kAlpha[0] - sinThetaI * sin2kAlpha[0];
+        dr::masked(sinThetaIp, dr::eq(p, 1)) = sinThetaI * m_cos_2k_alpha[0] + cosThetaI * m_sin_2k_alpha[0];
+        dr::masked(cosThetaIp, dr::eq(p, 1)) = cosThetaI * m_cos_2k_alpha[0] - sinThetaI * m_sin_2k_alpha[0];
         // }
         // else if (p == 2) {
-        dr::masked(sinThetaIp, dr::eq(p, 2)) = sinThetaI * cos2kAlpha[2] + cosThetaI * sin2kAlpha[2];
-        dr::masked(cosThetaIp, dr::eq(p, 2)) = cosThetaI * cos2kAlpha[2] - sinThetaI * sin2kAlpha[2];
+        dr::masked(sinThetaIp, dr::eq(p, 2)) = sinThetaI * m_cos_2k_alpha[2] + cosThetaI * m_sin_2k_alpha[2];
+        dr::masked(cosThetaIp, dr::eq(p, 2)) = cosThetaI * m_cos_2k_alpha[2] - sinThetaI * m_sin_2k_alpha[2];
         // }
 
         // Sample $M_p$ to compute $\thetai$
 
         Float cosTheta =
-            1 + v[pMax] * dr::log(u[1][0] + (1 - u[1][0]) * dr::exp(-2 / v[pMax]));
+            1 + m_v[pMax] * dr::log(u[1][0] + (1 - u[1][0]) * dr::exp(-2 / m_v[pMax]));
         for (int i = 0; i < pMax; i++) {
-            dr::masked(cosTheta, dr::eq(p, i)) = 1 + v[i] * dr::log(u[1][0] + (1 - u[1][0]) * dr::exp(-2 / v[i]));
+            dr::masked(cosTheta, dr::eq(p, i)) = 1 + m_v[i] * dr::log(u[1][0] + (1 - u[1][0]) * dr::exp(-2 / m_v[i]));
         }
 
         Float sinTheta = dr::safe_sqrt(1 - dr::sqr(cosTheta));
@@ -190,7 +172,7 @@ public:
 
         // dphi = 2 * dr::Pi<ScalarFloat> * u[0][1];
 
-        dphi = dr::select(p < pMax, Phi + SampleTrimmedLogistic(u[0][1], s, -dr::Pi<ScalarFloat>, dr::Pi<ScalarFloat>), 2 * dr::Pi<ScalarFloat> * u[0][1]);
+        dphi = dr::select(p < pMax, Phi + SampleTrimmedLogistic(u[0][1], m_s, -dr::Pi<ScalarFloat>, dr::Pi<ScalarFloat>), 2 * dr::Pi<ScalarFloat> * u[0][1]);
 
         /******* for different dimension  ********/
 
@@ -206,21 +188,21 @@ public:
             Float sinThetaIp, cosThetaIp;
             if (i == 0) {
                 sinThetaIp =
-                    sinThetaI * cos2kAlpha[1] - cosThetaI * sin2kAlpha[1];
+                    sinThetaI * m_cos_2k_alpha[1] - cosThetaI * m_sin_2k_alpha[1];
                 cosThetaIp =
-                    cosThetaI * cos2kAlpha[1] + sinThetaI * sin2kAlpha[1];
+                    cosThetaI * m_cos_2k_alpha[1] + sinThetaI * m_sin_2k_alpha[1];
             }
             // Handle remainder of $p$ values for hair scale tilt
             else if (i == 1) {
                 sinThetaIp =
-                    sinThetaI * cos2kAlpha[0] + cosThetaI * sin2kAlpha[0];
+                    sinThetaI * m_cos_2k_alpha[0] + cosThetaI * m_sin_2k_alpha[0];
                 cosThetaIp =
-                    cosThetaI * cos2kAlpha[0] - sinThetaI * sin2kAlpha[0];
+                    cosThetaI * m_cos_2k_alpha[0] - sinThetaI * m_sin_2k_alpha[0];
             } else if (i == 2) {
                 sinThetaIp =
-                    sinThetaI * cos2kAlpha[2] + cosThetaI * sin2kAlpha[2];
+                    sinThetaI * m_cos_2k_alpha[2] + cosThetaI * m_sin_2k_alpha[2];
                 cosThetaIp =
-                    cosThetaI * cos2kAlpha[2] - sinThetaI * sin2kAlpha[2];
+                    cosThetaI * m_cos_2k_alpha[2] - sinThetaI * m_sin_2k_alpha[2];
             } else {
                 sinThetaIp = sinThetaI;
                 cosThetaIp = cosThetaI;
@@ -228,17 +210,16 @@ public:
 
             // Handle out-of-range $\cos \thetao$ from scale adjustment
             cosThetaIp = dr::abs(cosThetaIp);
-            _pdf += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, v[i]) * apPdf[i] * Np(dphi, i, s, gammaI, gammaT);
+            bs.pdf += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, m_v[i]) * apPdf[i] * Np(dphi, i, m_s, gammaI, gammaT);
 
-            // _pdf += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, v[pMax]) *  apPdf[pMax] * (1 / (2 * dr::Pi<ScalarFloat>) );
         }
 
-        _pdf += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, v[pMax]) *
+        bs.pdf += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, m_v[pMax]) *
                 apPdf[pMax] * (1 / (2 * dr::Pi<ScalarFloat>) );
 
-        bs.wo                = wo;
-        bs.pdf               = dr::select(dr::isnan(_pdf) || dr::isinf(_pdf), 0, _pdf);
-        bs.eta               = 1.;
+        bs.wo  = wo;
+        bs.pdf = dr::select(dr::isnan(bs.pdf) || dr::isinf(bs.pdf), 0, bs.pdf);
+        bs.eta = 1.f;
         bs.sampled_type      = +BSDFFlags::Glossy;
         bs.sampled_component = 0;
 
@@ -248,8 +229,6 @@ public:
         // bs.eta               = 1.;
         // bs.sampled_type      = +BSDFFlags::Glossy;
         // bs.sampled_component = 0;
-
-        // std::cout<<bs.wo<<std::endl;
 
         UnpolarizedSpectrum value =
             dr::select(dr::neq(bs.pdf, 0), eval(ctx, si, bs.wo, active) / bs.pdf, 0);
@@ -315,21 +294,21 @@ public:
             Float sinThetaIp, cosThetaIp;
             if (p == 0) {
                 sinThetaIp =
-                    sinThetaI * cos2kAlpha[1] - cosThetaI * sin2kAlpha[1];
+                    sinThetaI * m_cos_2k_alpha[1] - cosThetaI * m_sin_2k_alpha[1];
                 cosThetaIp =
-                    cosThetaI * cos2kAlpha[1] + sinThetaI * sin2kAlpha[1];
+                    cosThetaI * m_cos_2k_alpha[1] + sinThetaI * m_sin_2k_alpha[1];
             }
             // Handle remainder of $p$ values for hair scale tilt
             else if (p == 1) {
                 sinThetaIp =
-                    sinThetaI * cos2kAlpha[0] + cosThetaI * sin2kAlpha[0];
+                    sinThetaI * m_cos_2k_alpha[0] + cosThetaI * m_sin_2k_alpha[0];
                 cosThetaIp =
-                    cosThetaI * cos2kAlpha[0] - sinThetaI * sin2kAlpha[0];
+                    cosThetaI * m_cos_2k_alpha[0] - sinThetaI * m_sin_2k_alpha[0];
             } else if (p == 2) {
                 sinThetaIp =
-                    sinThetaI * cos2kAlpha[2] + cosThetaI * sin2kAlpha[2];
+                    sinThetaI * m_cos_2k_alpha[2] + cosThetaI * m_sin_2k_alpha[2];
                 cosThetaIp =
-                    cosThetaI * cos2kAlpha[2] - sinThetaI * sin2kAlpha[2];
+                    cosThetaI * m_cos_2k_alpha[2] - sinThetaI * m_sin_2k_alpha[2];
             } else {
                 sinThetaIp = sinThetaI;
                 cosThetaIp = cosThetaI;
@@ -338,12 +317,12 @@ public:
             // Handle out-of-range $\cos \thetao$ from scale adjustment
             cosThetaIp = dr::abs(cosThetaIp);
 
-            fsum += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, v[p]) * ap[p] * Np(phi, p, s, gammaI, gammaT);
+            fsum += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, m_v[p]) * ap[p] * Np(phi, p, m_s, gammaI, gammaT);
             // fsum += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, v[pMax]) * ap[pMax] / (2.f * dr::Pi<ScalarFloat>);
         }
 
         // Compute contribution of remaining terms after _pMax_
-        fsum += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, v[pMax]) *
+        fsum += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, m_v[pMax]) *
                 ap[pMax] / (2.f * dr::Pi<ScalarFloat>);
 
         // If it is nan, return 0
@@ -374,7 +353,7 @@ public:
         Float sinThetaI = wi.x();
         Float cosThetaI = dr::safe_sqrt(1 - dr::sqr(sinThetaI));
         Float phiI      = dr::atan2(wi.z(), wi.y());
-        
+
         // Compute $\gammat$ for refracted ray
         Float etap = dr::safe_sqrt(Float(m_eta * m_eta) - dr::sqr(sinThetaI)) / cosThetaI;
         Float sinGammaT = h / etap;
@@ -398,15 +377,15 @@ public:
             // scales
             Float sinThetaIp, cosThetaIp;
             if (p == 0) {
-                sinThetaIp = sinThetaI * cos2kAlpha[1] - cosThetaI * sin2kAlpha[1];
-                cosThetaIp = cosThetaI * cos2kAlpha[1] + sinThetaI * sin2kAlpha[1];
+                sinThetaIp = sinThetaI * m_cos_2k_alpha[1] - cosThetaI * m_sin_2k_alpha[1];
+                cosThetaIp = cosThetaI * m_cos_2k_alpha[1] + sinThetaI * m_sin_2k_alpha[1];
             }
             else if (p == 1) {
-                sinThetaIp = sinThetaI * cos2kAlpha[0] + cosThetaI * sin2kAlpha[0];
-                cosThetaIp = cosThetaI * cos2kAlpha[0] - sinThetaI * sin2kAlpha[0];
+                sinThetaIp = sinThetaI * m_cos_2k_alpha[0] + cosThetaI * m_sin_2k_alpha[0];
+                cosThetaIp = cosThetaI * m_cos_2k_alpha[0] - sinThetaI * m_sin_2k_alpha[0];
             } else if (p == 2) {
-                sinThetaIp = sinThetaI * cos2kAlpha[2] + cosThetaI * sin2kAlpha[2];
-                cosThetaIp = cosThetaI * cos2kAlpha[2] - sinThetaI * sin2kAlpha[2];
+                sinThetaIp = sinThetaI * m_cos_2k_alpha[2] + cosThetaI * m_sin_2k_alpha[2];
+                cosThetaIp = cosThetaI * m_cos_2k_alpha[2] - sinThetaI * m_sin_2k_alpha[2];
             } else {
                 sinThetaIp = sinThetaI;
                 cosThetaIp = cosThetaI;
@@ -418,14 +397,14 @@ public:
             /******* for different dimension  ********/
 
             // uniform Np
-            // _pdf += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, v[p]) * apPdf[p] * (1 / (2 * dr::Pi<ScalarFloat>)); 
+            // _pdf += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, v[p]) * apPdf[p] * (1 / (2 * dr::Pi<ScalarFloat>));
 
             // importance sampling
-            _pdf += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, v[p]) * apPdf[p] * Np(phi, p, s, gammaI, gammaT);
+            _pdf += Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, m_v[p]) * apPdf[p] * Np(phi, p, m_s, gammaI, gammaT);
 
             /******* for different dimension  ********/
         }
-        _pdf += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, v[pMax]) *
+        _pdf += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, m_v[pMax]) *
                 apPdf[pMax] * (1 / (2 * dr::Pi<ScalarFloat>) );
 
         _pdf = dr::select(dr::isnan(_pdf) || dr::isinf(_pdf), 0, _pdf);
@@ -492,16 +471,16 @@ public:
             // scales
             Float sinThetaIp, cosThetaIp;
             if (p == 0) {
-                sinThetaIp = sinThetaI * cos2kAlpha[1] - cosThetaI * sin2kAlpha[1];
-                cosThetaIp = cosThetaI * cos2kAlpha[1] + sinThetaI * sin2kAlpha[1];
+                sinThetaIp = sinThetaI * m_cos_2k_alpha[1] - cosThetaI * m_sin_2k_alpha[1];
+                cosThetaIp = cosThetaI * m_cos_2k_alpha[1] + sinThetaI * m_sin_2k_alpha[1];
             }
             // Handle remainder of $p$ values for hair scale tilt
             else if (p == 1) {
-                sinThetaIp = sinThetaI * cos2kAlpha[0] + cosThetaI * sin2kAlpha[0];
-                cosThetaIp = cosThetaI * cos2kAlpha[0] - sinThetaI * sin2kAlpha[0];
+                sinThetaIp = sinThetaI * m_cos_2k_alpha[0] + cosThetaI * m_sin_2k_alpha[0];
+                cosThetaIp = cosThetaI * m_cos_2k_alpha[0] - sinThetaI * m_sin_2k_alpha[0];
             } else if (p == 2) {
-                sinThetaIp = sinThetaI * cos2kAlpha[2] + cosThetaI * sin2kAlpha[2];
-                cosThetaIp = cosThetaI * cos2kAlpha[2] - sinThetaI * sin2kAlpha[2];
+                sinThetaIp = sinThetaI * m_cos_2k_alpha[2] + cosThetaI * m_sin_2k_alpha[2];
+                cosThetaIp = cosThetaI * m_cos_2k_alpha[2] - sinThetaI * m_sin_2k_alpha[2];
             } else {
                 sinThetaIp = sinThetaI;
                 cosThetaIp = cosThetaI;
@@ -510,8 +489,8 @@ public:
             // Handle out-of-range $\cos \thetao$ from scale adjustment
             cosThetaIp = dr::abs(cosThetaIp);
 
-            Float M_p = Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, v[p]);
-            Float N_p = Np(phi, p, s, gammaI, gammaT);
+            Float M_p = Mp(cosThetaO, cosThetaIp, sinThetaO, sinThetaIp, m_v[p]);
+            Float N_p = Np(phi, p, m_s, gammaI, gammaT);
 
             _pdf += M_p * apPdf[p] * N_p;
             // _pdf += M_p * apPdf[p] / (2.f * dr::Pi<ScalarFloat>);
@@ -520,10 +499,10 @@ public:
             // fsum += M_p * ap[p] / (2.f * dr::Pi<ScalarFloat>);
         }
 
-        _pdf += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, v[pMax]) *
+        _pdf += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, m_v[pMax]) *
                apPdf[pMax] / (2.f * dr::Pi<ScalarFloat>);
 
-        fsum += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, v[pMax]) *
+        fsum += Mp(cosThetaO, cosThetaI, sinThetaO, sinThetaI, m_v[pMax]) *
                 ap[pMax] / (2.f * dr::Pi<ScalarFloat>);
 
         fsum = dr::select(dr::isnan(fsum) || dr::isinf(fsum), 0, fsum);
@@ -541,25 +520,9 @@ public:
         return oss.str();
     }
 
-    MI_DECLARE_CLASS()
-
 private:
-    static const int pMax = 3;
-    constexpr static const ScalarFloat SqrtPiOver8 = 0.626657069f;
-    Float v[pMax + 1];
-    Float s;
-    Float sin2kAlpha[3], cos2kAlpha[3];
-
-    ScalarFloat m_beta_m, m_beta_n, m_alpha;
-    ScalarFloat m_eta;
-
-    /// Hair color
-    ScalarFloat m_eumelanin;
-    ScalarFloat m_pheomelanin;
-
-    // Just for test
-    ScalarVector3f m_sigma_a;
-    bool isColor = false;
+    constexpr static const int pMax = 3;
+    static_assert(pMax >= 3, "There should be at least 3 segments!");
 
     // Helper function
     inline Float I0(Float x) const {
@@ -638,7 +601,7 @@ private:
     dr::Array<Spectrum, pMax + 1> Ap(Float cosThetaI, Float eta, Float h,
                                             const Spectrum &T) const {
         dr::Array<Spectrum, pMax + 1> ap;
-        
+
         // Compute $p=0$ attenuation at initial cylinder intersection
         Float cosGammaI = dr::safe_sqrt(1 - h * h);
         Float cosTheta  = cosThetaI * cosGammaI;
@@ -720,7 +683,7 @@ private:
         return apPdf;
     }
 
-    // get waveleingths of the ray 
+    // Get wavelengths of the ray
     inline Spectrum get_spectrum(const SurfaceInteraction3f &si) const {
         Spectrum wavelengths;
         if constexpr (is_spectral_v<Spectrum>) {
@@ -733,16 +696,32 @@ private:
         return wavelengths;
     }
 
-    // pheomelanin absorption coefficient 
+    // Pheomelanin absorption coefficient
     inline Spectrum pheomelanin(const Spectrum &lambda) const {
         return 2.9e12f * dr::pow(lambda, -4.75f); // adjusted relative to 0.1mm hair width
     }
 
-    // eumelanin absorption coefficient
+    // Eumelanin absorption coefficient
     inline Spectrum eumelanin(const Spectrum &lambda) const {
         return 6.6e8f * dr::pow(lambda, -3.33f); // adjusted relative to 0.1mm hair width
     }
 
+    MI_DECLARE_CLASS()
+
+private:
+    ScalarFloat m_beta_m, m_beta_n, m_alpha;
+    ScalarFloat m_eta;
+
+    /// Pigmentation
+    ScalarFloat m_eumelanin;
+    ScalarFloat m_pheomelanin;
+
+    Float m_v[pMax + 1];
+    Float m_s;
+    Float m_sin_2k_alpha[3], m_cos_2k_alpha[3];
+
+    ScalarVector3f m_sigma_a;
+    bool isColor = false;
 };
 
 MI_IMPLEMENT_CLASS_VARIANT(Hair, BSDF)
