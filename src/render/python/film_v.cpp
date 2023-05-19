@@ -91,6 +91,7 @@ MI_PY_EXPORT(Film) {
         .def("size",
              [] (const Film *film) { return ScalarVector2u(film->size()); },
              D(Film, size))
+        .def_method(Film, set_size, "size"_a)
         .def("crop_size",
              [] (const Film *film) { return ScalarVector2u(film->crop_size()); },
              D(Film, crop_size))

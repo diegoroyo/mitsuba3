@@ -461,6 +461,13 @@ public:
     std::vector<ref<Emitter>> &emitters() { return m_emitters; }
     /// Return the list of emitters (const version)
     const std::vector<ref<Emitter>> &emitters() const { return m_emitters; }
+    /// Adds a new emitter
+    void add_emitter(const ref<Emitter> &emitter) {
+        m_emitters.push_back(emitter);
+        m_emitters_dr = dr::load<DynamicBuffer<EmitterPtr>>(
+                            m_emitters.data(), m_emitters.size());
+        m_emitter_pmf = m_emitters.empty() ? 0.f : (1.f / m_emitters.size());
+    }
 
     /// Return the environment emitter (if any)
     const Emitter *environment() const { return m_environment.get(); }

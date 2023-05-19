@@ -319,6 +319,11 @@ public:
         return m_to_world.value();
     }
 
+    /// Set the local space to world space transformation
+    void set_world_transform(const Transform4f& transform) {
+        m_to_world = transform;
+    }
+
     /**
      * \brief Does the method \ref sample_ray() require a uniformly distributed
      * 2D sample for the \c sample2 parameter?
