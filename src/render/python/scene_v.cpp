@@ -102,6 +102,7 @@ MI_PY_EXPORT(Scene) {
              D(Scene, sensors))
         .def("sensors_dr", &Scene::sensors_dr, D(Scene, sensors_dr))
         .def("emitters", py::overload_cast<>(&Scene::emitters), D(Scene, emitters))
+        .def_method(Scene, add_emitter, "emitter"_a)
         .def("emitters_dr", &Scene::emitters_dr, D(Scene, emitters_dr))
         .def_method(Scene, environment)
         .def("shapes",

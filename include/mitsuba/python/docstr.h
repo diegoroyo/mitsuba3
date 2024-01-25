@@ -2771,6 +2771,8 @@ static const char *__doc_mitsuba_Endpoint_traverse = R"doc(//! @})doc";
 
 static const char *__doc_mitsuba_Endpoint_world_transform = R"doc(Return the local space to world space transformation)doc";
 
+static const char *__doc_mitsuba_Endpoint_set_world_transform = R"doc(Set the local space to world space transformation)doc";
+
 static const char *__doc_mitsuba_FileResolver =
 R"doc(Simple class for resolving paths on Linux/Windows/Mac OS
 
@@ -6738,6 +6740,8 @@ static const char *__doc_mitsuba_Scene_clear_shapes_dirty = R"doc(Unmarks all sh
 static const char *__doc_mitsuba_Scene_emitters = R"doc(Return the list of emitters)doc";
 
 static const char *__doc_mitsuba_Scene_emitters_2 = R"doc(Return the list of emitters (const version))doc";
+
+static const char *__doc_mitsuba_Scene_add_emitter = R"doc(Adds a new emitter)doc";
 
 static const char *__doc_mitsuba_Scene_emitters_dr = R"doc(Return the list of emitters as a Dr.Jit array)doc";
 
